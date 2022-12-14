@@ -14,17 +14,26 @@ Therefore, we recommend you to use detectron2 as an library and take
 this file as an example of how to use the library.
 You may want to write your own script with your datasets and other customizations.
 """
-
+import itertools
 import logging
 import os
+import re
 from collections import OrderedDict
+
+import imageio.v3
+import pycocotools.mask
 import torch
+import numpy as np
+from detectron2.structures import BoxMode
+from pathlib import Path
 from torch.nn.parallel import DistributedDataParallel
+import xml.etree.ElementTree as ET
 
 import detectron2.utils.comm as comm
-from detectron2.data import MetadataCatalog, build_detection_train_loader
+from detectron2.data import MetadataCatalog, build_detection_train_loader, DatasetCatalog
 from detectron2.engine import DefaultTrainer, default_argument_parser, default_setup, hooks, launch
 from detectron2.utils.events import EventStorage
+from detectron2.utils.file_io import PathManager
 from detectron2.evaluation import (
     COCOEvaluator,
     COCOPanopticEvaluator,
@@ -36,12 +45,90 @@ from detectron2.evaluation import (
 )
 from detectron2.modeling import GeneralizedRCNNWithTTA
 from detectron2.utils.logger import setup_logger
+from tqdm import tqdm
 
 from adet.data.dataset_mapper import DatasetMapperWithBasis
 from adet.data.fcpose_dataset_mapper import FCPoseDatasetMapper
 from adet.config import get_cfg
 from adet.checkpoint import AdetCheckpointer
 from adet.evaluation import TextEvaluator
+
+
+def register_custom_voc():
+
+    CLASS_NAMES = (
+        "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat",
+        "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person",
+        "pottedplant", "sheep", "sofa", "train", "tvmonitor"
+    )
+
+    _root = os.getenv("DETECTRON2_DATASETS", "datasets")
+    dirname = os.path.join(_root, "VOC2012")
+
+    def _load_custom_voc_instances(dirname, split, class_names):
+        """
+            Load Pascal VOC instance segmentation annotations + gaze data to Detectron2 format.
+
+            Args:
+                dirname: Contain "Annotations", "ImageSets", "JPEGImages", "random_gaze"
+                split (str): one of "train", "val"
+                class_names: list or tuple of class names
+            """
+        base_folder = Path(dirname, "random_gaze", split)
+        annotation_dirname = PathManager.get_local_path(os.path.join(dirname, "Annotations/"))
+        bbox_regex = re.compile("\d{4}_\d{6}_x_min=(\d+)_x_max=(\d+)_y_min=(\d+)_y_max=(\d+)")
+        dicts_by_id = {}
+
+        for class_path in base_folder.iterdir():
+            cls_name = class_path.stem
+
+            cls_instance_mask_files = list(Path(class_path, "original").glob("*.png"))
+
+            for cls_instance_mask_file in tqdm(cls_instance_mask_files):
+                fileid = "_".join(cls_instance_mask_file.stem.split("_")[:2])
+                anno_file = os.path.join(annotation_dirname, fileid + ".xml")
+                jpeg_file = os.path.join(dirname, "JPEGImages", fileid + ".jpg")
+
+                with PathManager.open(anno_file) as f:
+                    tree = ET.parse(f)
+
+                if fileid not in dicts_by_id.keys():
+                    r = {
+                        "file_name": jpeg_file,
+                        "image_id": fileid,
+                        "height": int(tree.findall("./size/height")[0].text),
+                        "width": int(tree.findall("./size/width")[0].text),
+                        "annotations": []
+                    }
+                    dicts_by_id[fileid] = r
+
+                bbox_wrong_order = list(map(float, bbox_regex.match(str(cls_instance_mask_file.stem)).groups()))
+                bbox = [bbox_wrong_order[2], bbox_wrong_order[0], bbox_wrong_order[3], bbox_wrong_order[1]]
+
+                if split == "train":
+                    gaze_file = Path(cls_instance_mask_file.parent.parent, "spanning_tree", cls_instance_mask_file.name)
+                mask_array = imageio.v3.imread(cls_instance_mask_file).astype(bool).astype(np.uint8)
+                segmentation_rle_dict = pycocotools.mask.encode(np.asarray(mask_array, order="F"))
+
+                dicts_by_id[fileid]["annotations"].append(
+                    {"category_id": class_names.index(cls_name), "bbox": bbox, "bbox_mode": BoxMode.XYXY_ABS,
+                     "segmentation": segmentation_rle_dict,
+                     }
+                )
+
+        dicts = dicts_by_id.values()
+        return dicts
+
+    DatasetCatalog.register("voc_2012_gaze_train", lambda: _load_custom_voc_instances(dirname, split="train", class_names=CLASS_NAMES))
+    MetadataCatalog.get("voc_2012_gaze_train").set(
+        thing_classes=list(CLASS_NAMES), dirname=dirname, year=2012, split="train"
+    )
+    MetadataCatalog.get("voc_2012_gaze_train").evaluator_type = "coco"
+    DatasetCatalog.register("voc_2012_gaze_val", lambda: _load_custom_voc_instances(dirname, split="val", class_names=CLASS_NAMES))
+    MetadataCatalog.get("voc_2012_gaze_val").set(
+        thing_classes=list(CLASS_NAMES), dirname=dirname, year=2012, split="val"
+    )
+    MetadataCatalog.get("voc_2012_gaze_val").evaluator_type = "coco"
 
 
 class Trainer(DefaultTrainer):
@@ -197,6 +284,7 @@ def setup(args):
 
 def main(args):
     cfg = setup(args)
+    register_custom_voc()
 
     if args.eval_only:
         model = Trainer.build_model(cfg)
