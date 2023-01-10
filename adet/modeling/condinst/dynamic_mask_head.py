@@ -87,7 +87,7 @@ def parse_dynamic_params(params, channels, weight_nums, bias_nums):
     return weight_splits, bias_splits
 
 
-def build_dynamic_mask_head(cfg):
+def     build_dynamic_mask_head(cfg):
     return DynamicMaskHead(cfg)
 
 

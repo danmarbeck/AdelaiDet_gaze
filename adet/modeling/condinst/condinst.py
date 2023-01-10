@@ -97,6 +97,9 @@ class CondInst(nn.Module):
         self.pairwise_dilation = cfg.MODEL.BOXINST.PAIRWISE.DILATION
         self.pairwise_color_thresh = cfg.MODEL.BOXINST.PAIRWISE.COLOR_THRESH
 
+        # gazeinst configs
+        self.gazeinst_enabled = cfg.MODEL.GAZEINST.ENABLED
+
         # build top module
         in_channels = self.proposal_generator.in_channels_to_top_module
 

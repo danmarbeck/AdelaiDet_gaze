@@ -82,9 +82,9 @@ def register_custom_voc():
         for class_path in base_folder.iterdir():
             cls_name = class_path.stem
 
-            cls_instance_mask_files = list(Path(class_path, "original").glob("*.png"))
+            cls_instance_mask_files = list(Path(class_path, "masks").glob("*.png"))
 
-            for cls_instance_mask_file in tqdm(cls_instance_mask_files):
+            for cls_instance_mask_file in cls_instance_mask_files:
                 fileid = "_".join(cls_instance_mask_file.stem.split("_")[:2])
                 anno_file = os.path.join(annotation_dirname, fileid + ".xml")
                 jpeg_file = os.path.join(dirname, "JPEGImages", fileid + ".jpg")
@@ -107,8 +107,12 @@ def register_custom_voc():
 
                 if split == "train":
                     gaze_file = Path(cls_instance_mask_file.parent.parent, "spanning_tree", cls_instance_mask_file.name)
-                mask_array = imageio.v3.imread(cls_instance_mask_file).astype(bool).astype(np.uint8)
+                mask_array = imageio.v3.imread(cls_instance_mask_file)
+                if len(mask_array.shape) == 3:
+                    mask_array = np.sum(mask_array, axis=2, dtype=int)
+                mask_array = mask_array.astype(bool).astype(np.uint8)
                 segmentation_rle_dict = pycocotools.mask.encode(np.asarray(mask_array, order="F"))
+                assert type(segmentation_rle_dict) == dict, type(segmentation_rle_dict)
 
                 dicts_by_id[fileid]["annotations"].append(
                     {"category_id": class_names.index(cls_name), "bbox": bbox, "bbox_mode": BoxMode.XYXY_ABS,
