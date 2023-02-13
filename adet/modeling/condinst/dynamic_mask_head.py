@@ -48,7 +48,7 @@ def compute_pairwise_term(mask_logits, pairwise_size, pairwise_dilation):
     return -log_same_prob[:, 0]
 
 
-def dice_coefficient(x, target):
+def dice_coefficient(x, target, no_empty_mask=False):
     eps = 1e-5
     n_inst = x.size(0)
     x = x.reshape(n_inst, -1)
@@ -56,7 +56,21 @@ def dice_coefficient(x, target):
     intersection = (x * target).sum(dim=1)
     union = (x ** 2.0).sum(dim=1) + (target ** 2.0).sum(dim=1) + eps
     loss = 1. - (2 * intersection / union)
+    if no_empty_mask:
+        loss = loss * target.sum(dim=1).to(bool).to(int)
     return loss
+
+
+def recall_loss(x, target, no_empty_mask=False):
+    n_inst = x.size(0)
+    x = x.reshape(n_inst, -1)
+    target = target.reshape(n_inst, -1)
+
+    ce = 1 - ((target * x).sum(dim=1) + 1) / (target.sum(dim=1) + 1)
+
+    if no_empty_mask:
+        ce = ce * target.to(bool).to(int)
+    return ce
 
 
 def parse_dynamic_params(params, channels, weight_nums, bias_nums):
@@ -87,7 +101,7 @@ def parse_dynamic_params(params, channels, weight_nums, bias_nums):
     return weight_splits, bias_splits
 
 
-def     build_dynamic_mask_head(cfg):
+def build_dynamic_mask_head(cfg):
     return DynamicMaskHead(cfg)
 
 
@@ -110,6 +124,21 @@ class DynamicMaskHead(nn.Module):
         self.pairwise_dilation = cfg.MODEL.BOXINST.PAIRWISE.DILATION
         self.pairwise_color_thresh = cfg.MODEL.BOXINST.PAIRWISE.COLOR_THRESH
         self._warmup_iters = cfg.MODEL.BOXINST.PAIRWISE.WARMUP_ITERS
+
+        # gazeinst configs
+        self.gazeinst_enabled = cfg.MODEL.GAZEINST.ENABLED
+        self.gaze_loss_str = cfg.MODEL.GAZEINST.GAZE_LOSS
+        if self.gaze_loss_str == "recall":
+            self.gaze_loss = recall_loss
+        elif self.gaze_loss_str == "dice":
+            self.gaze_loss = dice_coefficient
+        else:
+            self.gaze_loss = dice_coefficient
+        self.gaze_loss_weight = cfg.MODEL.GAZEINST.GAZE_LOSS_WEIGHT
+        self.gaze_loss_cooldown = cfg.MODEL.GAZEINST.GAZE_LOSS_COOLDOWN
+        self.gaze_loss_cooldown_baseline = cfg.MODEL.GAZEINST.GAZE_LOSS_COOLDOWN_BASELINE
+        self.gaze_loss_cooldown_iters = cfg.MODEL.GAZEINST.GAZE_LOSS_COOLDOWN_ITERS
+        self.gaze_loss_no_empty_mask = cfg.MODEL.GAZEINST.GAZE_LOSS_NO_EMPTY_MASK
 
         weight_nums, bias_nums = [], []
         for l in range(self.num_layers):
@@ -214,6 +243,8 @@ class DynamicMaskHead(nn.Module):
                 else:
                     losses["loss_prj"] = dummy_loss
                     losses["loss_pairwise"] = dummy_loss
+                    if self.gazeinst_enabled:
+                        losses["loss_gaze_mask"] = dummy_loss
             else:
                 mask_logits = self.mask_heads_forward_with_coords(
                     mask_feats, mask_feat_stride, pred_instances
@@ -242,6 +273,15 @@ class DynamicMaskHead(nn.Module):
                         "loss_prj": loss_prj_term,
                         "loss_pairwise": loss_pairwise,
                     })
+
+                    if self.gazeinst_enabled:
+                        gaze_bitmasks = torch.cat([x.gaze_bitmasks for x in gt_instances])
+                        gaze_bitmasks = gaze_bitmasks[gt_inds].unsqueeze(dim=1).to(dtype=mask_feats.dtype)
+                        loss_gaze_mask = self.gaze_loss(mask_scores, gaze_bitmasks, self.gaze_loss_no_empty_mask).mean() * self.gaze_loss_weight
+                        if self.gaze_loss_cooldown:
+                            cooldown_factor = max((float(self.gaze_loss_cooldown_iters) - self._iter.item()) / float(self.gaze_loss_cooldown_iters), self.gaze_loss_cooldown_baseline)
+                            loss_gaze_mask = loss_gaze_mask * cooldown_factor
+                        losses["loss_gaze_mask"] = loss_gaze_mask
                 else:
                     # fully-supervised CondInst losses
                     mask_losses = dice_coefficient(mask_scores, gt_bitmasks)

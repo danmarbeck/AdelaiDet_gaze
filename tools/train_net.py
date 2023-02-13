@@ -54,8 +54,7 @@ from adet.checkpoint import AdetCheckpointer
 from adet.evaluation import TextEvaluator
 
 
-def register_custom_voc():
-
+def register_custom_voc(cfg):
     CLASS_NAMES = (
         "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat",
         "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person",
@@ -105,8 +104,6 @@ def register_custom_voc():
                 bbox_wrong_order = list(map(float, bbox_regex.match(str(cls_instance_mask_file.stem)).groups()))
                 bbox = [bbox_wrong_order[2], bbox_wrong_order[0], bbox_wrong_order[3], bbox_wrong_order[1]]
 
-                if split == "train":
-                    gaze_file = Path(cls_instance_mask_file.parent.parent, "spanning_tree", cls_instance_mask_file.name)
                 mask_array = imageio.v3.imread(cls_instance_mask_file)
                 if len(mask_array.shape) == 3:
                     mask_array = np.sum(mask_array, axis=2, dtype=int)
@@ -114,21 +111,37 @@ def register_custom_voc():
                 segmentation_rle_dict = pycocotools.mask.encode(np.asarray(mask_array, order="F"))
                 assert type(segmentation_rle_dict) == dict, type(segmentation_rle_dict)
 
-                dicts_by_id[fileid]["annotations"].append(
-                    {"category_id": class_names.index(cls_name), "bbox": bbox, "bbox_mode": BoxMode.XYXY_ABS,
-                     "segmentation": segmentation_rle_dict,
-                     }
-                )
+                ann_dict = {"category_id": class_names.index(cls_name), "bbox": bbox, "bbox_mode": BoxMode.XYXY_ABS,
+                            "segmentation": segmentation_rle_dict,
+                            }
+
+                if split == "train":
+                    pseudo_mask_file = Path(cls_instance_mask_file.parent.parent, cfg.MODEL.GAZEINST.GAZE_LOSS_LABEL,
+                                            cls_instance_mask_file.name)
+                    if not pseudo_mask_file.is_file():
+                        pseudo_mask_array = np.zeros_like(mask_array)
+                    else:
+                        pseudo_mask_array = imageio.v3.imread(pseudo_mask_file)
+                    if len(pseudo_mask_array.shape) == 3:
+                        pseudo_mask_array = np.sum(pseudo_mask_array[:,:,:3], axis=2, dtype=int)
+                    pseudo_mask_array = pseudo_mask_array.astype(bool).astype(np.uint8)
+                    pseudo_segmentation_rle_dict = pycocotools.mask.encode(np.asarray(pseudo_mask_array, order="F"))
+
+                    ann_dict["gaze_segmentation"] = pseudo_segmentation_rle_dict
+
+                dicts_by_id[fileid]["annotations"].append(ann_dict)
 
         dicts = dicts_by_id.values()
         return dicts
 
-    DatasetCatalog.register("voc_2012_gaze_train", lambda: _load_custom_voc_instances(dirname, split="train", class_names=CLASS_NAMES))
+    DatasetCatalog.register("voc_2012_gaze_train",
+                            lambda: _load_custom_voc_instances(dirname, split="train", class_names=CLASS_NAMES))
     MetadataCatalog.get("voc_2012_gaze_train").set(
         thing_classes=list(CLASS_NAMES), dirname=dirname, year=2012, split="train"
     )
     MetadataCatalog.get("voc_2012_gaze_train").evaluator_type = "coco"
-    DatasetCatalog.register("voc_2012_gaze_val", lambda: _load_custom_voc_instances(dirname, split="val", class_names=CLASS_NAMES))
+    DatasetCatalog.register("voc_2012_gaze_val",
+                            lambda: _load_custom_voc_instances(dirname, split="val", class_names=CLASS_NAMES))
     MetadataCatalog.get("voc_2012_gaze_val").set(
         thing_classes=list(CLASS_NAMES), dirname=dirname, year=2012, split="val"
     )
@@ -140,6 +153,7 @@ class Trainer(DefaultTrainer):
     This is the same Trainer except that we rewrite the
     `build_train_loader`/`resume_or_load` method.
     """
+
     def build_hooks(self):
         """
         Replace `DetectionCheckpointer` with `AdetCheckpointer`.
@@ -158,7 +172,7 @@ class Trainer(DefaultTrainer):
                 )
                 ret[i] = hooks.PeriodicCheckpointer(self.checkpointer, self.cfg.SOLVER.CHECKPOINT_PERIOD)
         return ret
-    
+
     def resume_or_load(self, resume=True):
         checkpoint = self.checkpointer.resume_or_load(self.cfg.MODEL.WEIGHTS, resume=resume)
         if resume and self.checkpointer.has_checkpoint():
@@ -288,14 +302,14 @@ def setup(args):
 
 def main(args):
     cfg = setup(args)
-    register_custom_voc()
+    register_custom_voc(cfg)
 
     if args.eval_only:
         model = Trainer.build_model(cfg)
         AdetCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
             cfg.MODEL.WEIGHTS, resume=args.resume
         )
-        res = Trainer.test(cfg, model) # d2 defaults.py
+        res = Trainer.test(cfg, model)  # d2 defaults.py
         if comm.is_main_process():
             verify_results(cfg, res)
         if cfg.TEST.AUG.ENABLED:

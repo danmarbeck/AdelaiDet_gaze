@@ -88,6 +88,7 @@ class DatasetMapperWithBasis(DatasetMapper):
         self.basis_loss_on = cfg.MODEL.BASIS_MODULE.LOSS_ON
         self.ann_set = cfg.MODEL.BASIS_MODULE.ANN_SET
         self.boxinst_enabled = cfg.MODEL.BOXINST.ENABLED
+        self.gazeinst_enabled = cfg.MODEL.GAZEINST.ENABLED
 
         if self.boxinst_enabled:
             self.use_instance_mask = False
@@ -190,6 +191,8 @@ class DatasetMapperWithBasis(DatasetMapper):
                     anno.pop("segmentation", None)
                 if not self.use_keypoint:
                     anno.pop("keypoints", None)
+                if not self.gazeinst_enabled:
+                    anno.pop("gaze_segmentation", None)
 
             # USER: Implement additional transformations if you have other types of data
             annos = [

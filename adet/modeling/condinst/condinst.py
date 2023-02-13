@@ -147,6 +147,8 @@ class CondInst(nn.Module):
                     gt_instances, original_images.tensor, original_image_masks.tensor,
                     original_images.tensor.size(-2), original_images.tensor.size(-1)
                 )
+                if self.gazeinst_enabled:
+                    self.add_bitmasks_for_gaze_mask(gt_instances, images_norm.tensor.size(-2), images_norm.tensor.size(-1))
             else:
                 self.add_bitmasks(gt_instances, images_norm.tensor.size(-2), images_norm.tensor.size(-1))
         else:
@@ -280,6 +282,17 @@ class CondInst(nn.Module):
                 bitmasks = bitmasks_full[:, start::self.mask_out_stride, start::self.mask_out_stride]
                 per_im_gt_inst.gt_bitmasks = bitmasks
                 per_im_gt_inst.gt_bitmasks_full = bitmasks_full
+
+    def add_bitmasks_for_gaze_mask(self, instances, im_h, im_w):
+        for per_im_gt_inst in instances:
+            start = int(self.mask_out_stride // 2)
+            bitmasks = per_im_gt_inst.get("gaze_segmentation").tensor
+            h, w = bitmasks.size()[1:]
+            # pad to new size
+            bitmasks_full = F.pad(bitmasks, (0, im_w - w, 0, im_h - h), "constant", 0)
+            bitmasks = bitmasks_full[:, start::self.mask_out_stride, start::self.mask_out_stride]
+            per_im_gt_inst.gaze_bitmasks = bitmasks
+            per_im_gt_inst.gaze_bitmasks_full = bitmasks_full
 
     def add_bitmasks_from_boxes(self, instances, images, image_masks, im_h, im_w):
         stride = self.mask_out_stride

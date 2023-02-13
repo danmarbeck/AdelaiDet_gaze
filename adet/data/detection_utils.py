@@ -9,6 +9,9 @@ from detectron2.data.detection_utils import \
 from detectron2.data.detection_utils import \
     transform_instance_annotations as d2_transform_inst_anno
 
+import pycocotools.mask as mask_util
+from detectron2.structures import BitMasks
+
 import math
 
 def transform_instance_annotations(
@@ -25,6 +28,14 @@ def transform_instance_annotations(
     if "beziers" in annotation:
         beziers = transform_beziers_annotations(annotation["beziers"], transforms)
         annotation["beziers"] = beziers
+
+    if "gaze_segmentation" in annotation:
+        segm = annotation["gaze_segmentation"]
+        # RLE
+        mask = mask_util.decode(segm)
+        mask = transforms.apply_segmentation(mask)
+        assert tuple(mask.shape[:2]) == image_size
+        annotation["gaze_segmentation"] = mask
     return annotation
 
 
@@ -64,6 +75,33 @@ def annotations_to_instances(annos, image_size, mask_format="polygon"):
     if "rec" in annos[0]:
         text = [obj.get("rec", []) for obj in annos]
         instance.text = torch.as_tensor(text, dtype=torch.int32)
+
+    if "gaze_segmentation" in annos[0]:
+        gaze_segms = [obj["gaze_segmentation"] for obj in annos]
+        assert mask_format == "bitmask", mask_format
+        masks = []
+        for segm in gaze_segms:
+            if isinstance(segm, dict):
+                # COCO RLE
+                masks.append(mask_util.decode(segm))
+            elif isinstance(segm, np.ndarray):
+                assert segm.ndim == 2, "Expect segmentation of 2 dimensions, got {}.".format(
+                    segm.ndim
+                )
+                # mask array
+                masks.append(segm)
+            else:
+                raise ValueError(
+                    "Cannot convert segmentation of type '{}' to BitMasks!"
+                    "Supported types are: polygons as list[list[float] or ndarray],"
+                    " COCO-style RLE as a dict, or a binary segmentation mask "
+                    " in a 2D numpy array of shape HxW.".format(type(segm))
+                )
+        # torch.from_numpy does not support array with negative stride.
+        masks = BitMasks(
+            torch.stack([torch.from_numpy(np.ascontiguousarray(x)) for x in masks])
+        )
+        instance.gaze_segmentation = masks
 
     return instance
 

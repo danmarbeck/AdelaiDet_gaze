@@ -1,0 +1,8 @@
+_BASE_: "Base-GazeInst_VOC2012.yaml"
+MODEL:
+  WEIGHTS: "detectron2://ImageNetPretrained/MSRA/R-50.pkl"
+  RESNETS:
+    DEPTH: 50
+  GAZEINST:
+    GAZE_LOSS: "recall"
+OUTPUT_DIR: "output/gazeinst_MS_R_50_1x"

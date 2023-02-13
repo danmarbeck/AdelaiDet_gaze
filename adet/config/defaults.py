@@ -1,6 +1,10 @@
 from detectron2.config.defaults import _C
 from detectron2.config import CfgNode as CN
-
+# ---------------------------------------------------------------------------- #
+# Additional Test Config to test all checkpoints
+# ---------------------------------------------------------------------------- #
+_C.TEST.TEST_ALL_CHECKPOINTS = False
+_C.TEST.EVAL_PERIOD = 1000  # set the eval period to get intermediate results
 
 # ---------------------------------------------------------------------------- #
 # Additional Configs
@@ -260,6 +264,18 @@ _C.MODEL.BOXINST.PAIRWISE.SIZE = 3
 _C.MODEL.BOXINST.PAIRWISE.DILATION = 2
 _C.MODEL.BOXINST.PAIRWISE.WARMUP_ITERS = 10000
 _C.MODEL.BOXINST.PAIRWISE.COLOR_THRESH = 0.3
+
+# The options for GazeInst, which uses additional gaze date to create pseudo masks for instance segmentation
+_C.MODEL.GAZEINST = CN()
+# Whether to enable GazeInst
+_C.MODEL.GAZEINST.ENABLED = False
+_C.MODEL.GAZEINST.GAZE_LOSS = "dice"
+_C.MODEL.GAZEINST.GAZE_LOSS_WEIGHT = 1.
+_C.MODEL.GAZEINST.GAZE_LOSS_LABEL = "dense_graph"
+_C.MODEL.GAZEINST.GAZE_LOSS_COOLDOWN = True
+_C.MODEL.GAZEINST.GAZE_LOSS_COOLDOWN_BASELINE = 0.1
+_C.MODEL.GAZEINST.GAZE_LOSS_COOLDOWN_ITERS = 10000
+_C.MODEL.GAZEINST.GAZE_LOSS_NO_EMPTY_MASK = False
 
 # ---------------------------------------------------------------------------- #
 # TOP Module Options
